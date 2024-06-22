@@ -18,6 +18,9 @@ if os.path.exists(runtime_dir):
 import shutil
 import json
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import concurrent.futures
+
 from pydub import AudioSegment
 from PyQt5.QtWidgets import QSlider, QWidgetAction, QComboBox, QApplication, QMainWindow, QListWidget, QPushButton, QVBoxLayout, QFileDialog, QLineEdit, QLabel, QWidget, QMessageBox, QHeaderView, QProgressBar, QHBoxLayout, QTableWidget, QTableWidgetItem, QAction, QDesktopWidget
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
@@ -25,6 +28,10 @@ from PyQt5.QtCore import QUrl, QThread, pyqtSignal, Qt
 from PyQt5.QtGui import QFont
 from PyQt5.QtGui import QPixmap, QPalette, QBrush
 
+import whisper
+import re
+from fuzzywuzzy import fuzz
+import inflect
 
 # Get the directory of the currently executed script
 script_directory = os.path.dirname(os.path.realpath(__file__))
@@ -217,9 +224,30 @@ class AudiobookMaker(QMainWindow):
         self.regenerate_button.clicked.connect(self.regenerate_audio_for_sentence)
         left_layout.addWidget(self.regenerate_button)
 
+        # # -- Whisper Check Line Button
+        # self.whisper_check_button = QPushButton("Whisper Check Selected", self)
+        # self.whisper_check_button.clicked.connect(self.whisper_analyze)
+        # left_layout.addWidget(self.whisper_check_button)
+
+        # -- Continue Audiobook Generation Button
         self.continue_audiobook_button = QPushButton("Continue Audiobook Generation", self)
         self.continue_audiobook_button.clicked.connect(self.continue_audiobook_generation)
         left_layout.addWidget(self.continue_audiobook_button)
+
+        # -- Whisper Check All Button
+        self.whisper_check_all_button = QPushButton("Whisper Check All", self)
+        self.whisper_check_all_button.clicked.connect(self.whisper_analyze_all)
+        left_layout.addWidget(self.whisper_check_all_button)
+
+        # -- Regenerate Lines by Whisper Score
+        self.whisper_regenerate_button = QPushButton("Regenerate Audio by Whisper Score", self)
+        self.whisper_regenerate_button.clicked.connect(self.regenerate_audio_by_Whisper_Score)
+        left_layout.addWidget(self.whisper_regenerate_button)
+
+        # Create a QLabel for the header text
+        self.header_label2 = QLabel("", self)
+        self.header_label2.setStyleSheet("font-size: 14px; font-weight: bold;")  # Example: Styling the label
+        left_layout.addWidget(self.header_label2)
 
         self.progress_bar = QProgressBar(self)
         self.progress_bar.setMaximum(100)
@@ -227,6 +255,18 @@ class AudiobookMaker(QMainWindow):
         left_layout.addWidget(self.progress_bar)
         left_layout.addStretch(1)  # Add stretchable empty space
 
+        # Create a QLabel for the header text
+        #header_label = QLabel("Export Loading Bar", self)
+        #header_label.setStyleSheet("font-size: 14px; font-weight: bold;")  # Example: Styling the label
+        #left_layout.addWidget(header_label)
+
+        # # Create a progress bar
+        # self.progress = QProgressBar(self)
+        # #self.progress.setGeometry(30, 40, 200, 25)  # Adjust the geometry as needed
+        # self.progress.setMaximum(100)
+        # self.progress.setValue(0)
+        # left_layout.addWidget(self.progress)
+        #left_layout.addStretch(1)
 
         # Right side Widget
         right_layout = QVBoxLayout()
@@ -241,9 +281,10 @@ class AudiobookMaker(QMainWindow):
 
         # Table widget
         self.tableWidget = QTableWidget(self)
-        self.tableWidget.setColumnCount(1)
-        self.tableWidget.setHorizontalHeaderLabels(['Sentence'])
-        self.tableWidget.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.tableWidget.setColumnCount(2)
+        self.tableWidget.setHorizontalHeaderLabels(['Whisper Score','Sentence'])
+        self.tableWidget.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.tableWidget.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         right_layout.addWidget(self.tableWidget)
 
         main_layout.addLayout(right_layout)
@@ -367,6 +408,10 @@ class AudiobookMaker(QMainWindow):
             self.regenerate_button.setStyleSheet("")
             self.worker.finished.connect(self.enable_buttons)
 
+            #set the label text
+            self.header_label2.setText("Generating with Tortoise TTS")
+            QApplication.processEvents()  # Ensure the label update is processed immediately
+
             self.worker.progress_signal.connect(self.progress_bar.setValue)
             self.worker.start()
         else:
@@ -429,7 +474,6 @@ class AudiobookMaker(QMainWindow):
                 self.media_player.play()
                 self.pause_button.setStyleSheet("")
 
-
     def regenerate_audio_for_sentence(self):
         selected_row = self.tableWidget.currentRow()
         if selected_row == -1:  # No row is selected
@@ -441,7 +485,7 @@ class AudiobookMaker(QMainWindow):
             QMessageBox.warning(self, "Error", f'No audio path found, generate sentences with "Continue Audiobook" first before regenerating. This may have occured if you updated the audiobook and did not opt to generate new sentences')
             return
 
-        selected_sentence = self.text_audio_map[map_key]['sentence']
+        selected_sentence = self.text_audio_map[map_key]['sentence']['text']
         old_audio_path = self.text_audio_map[map_key]['audio_path']
         audio_path_parent = os.path.dirname(old_audio_path)
         generation_settings_path = os.path.join(audio_path_parent, "generation_settings.json")
@@ -466,6 +510,259 @@ class AudiobookMaker(QMainWindow):
         directory_path = os.path.join("audiobooks", book_name)
         # Save the updated map back to the file (implement this function)
         self.save_text_audio_map(directory_path)
+
+    def whisper_analyze(self):
+
+
+        selected_row = self.tableWidget.currentRow()
+        if selected_row == -1:  # No row is selected
+            QMessageBox.warning(self, "Error", 'Choose a sentence to analyze')
+            return
+
+        map_key = str(selected_row)
+        if not self.text_audio_map[map_key]["generated"]:
+            QMessageBox.warning(self, "Error", f'Sentence has not been generated for sentence {selected_row + 1}')
+            return
+
+        #get audio file path and sentence text
+        audio_path = self.text_audio_map[map_key]['audio_path']
+        sentence_text = self.text_audio_map[map_key]['sentence']['text']
+
+        #setup inflect engine
+        p = inflect.engine()
+
+        #function to convert a number to words
+        def number_to_words(number):
+            return p.number_to_words(int(number))
+        
+        #function to remove brackets
+        def remove_bracketed_text(text):
+            return re.sub(r'\s*\[.*?\]', '', text)
+
+        #function to normalize text by removing punctuation and converting to lowercase
+        def normalize_text(text):
+            text = text.lower() #lower case
+            text = re.sub(r'\b\d+\b', lambda x: number_to_words(x.group()), text)
+            text = re.sub(r'[^\w\s]', '', text) #remove punctuation
+            text = text.strip() #remove leading and trailing whitespace
+            return text
+        
+        #clean up the text
+        sentence_text = remove_bracketed_text(sentence_text)
+        sentence_text = normalize_text(sentence_text)
+
+        #load the whisper model    
+        model = whisper.load_model('large')
+
+        #transcribe the audio file
+        whisper_text = model.transcribe(audio_path)['text']
+
+        print(f'{sentence_text} & {whisper_text}')
+
+        #clean the whisper text
+        whisper_text = normalize_text(whisper_text)
+
+        similarity_score = fuzz.ratio(sentence_text, whisper_text)
+        
+        print(f'|{sentence_text}| & |{whisper_text}| --Score: {similarity_score}')
+
+    def whisper_analyze_all(self):
+        #setup for saving the scores
+        book_name = self.audiobook_label.text()
+        directory_path = os.path.join("audiobooks", book_name)
+
+        # Load the existing text_audio_map
+        audio_map_path = os.path.join(directory_path, 'text_audio_map.json')
+        with open(audio_map_path, 'r', encoding='utf-8') as file:
+            text_audio_map = json.load(file)
+            self.text_audio_map = text_audio_map
+
+        #set the label text
+        self.header_label2.setText("Loading Whisper Model")
+        QApplication.processEvents()  # Ensure the label update is processed immediately
+
+        #setup inflect engine
+        p = inflect.engine()
+
+        #load the whisper model    
+        model = whisper.load_model('large')
+
+        # #function to convert a number to words
+        # def number_to_words(number):
+        #     return p.number_to_words(int(number))
+        
+        # #function to remove brackets
+        # def remove_bracketed_text(text):
+        #     return re.sub(r'\s*\[.*?\]', '', text)
+
+        # #function to normalize text by removing punctuation and converting to lowercase
+        # def normalize_text(text):
+        #     text = text.lower() #lower case
+        #     text = re.sub(r'\b\d+\b', lambda x: number_to_words(x.group()), text)
+        #     text = re.sub(r'[^\w\s]', '', text) #remove punctuation
+        #     text = text.strip() #remove leading and trailing whitespace
+        #     return text
+
+        # def batch_whisper_score(self, map_key, directory_path):
+        #     #set up variables
+        #     audio_path = self.text_audio_map[map_key]['audio_path']
+        #     sentence_text = self.text_audio_map[map_key]['sentence']['text']
+
+        #     #clean up the text
+        #     sentence_text = remove_bracketed_text(sentence_text)
+        #     sentence_text = normalize_text(sentence_text)
+
+        #     #transcribe the audio file
+        #     whisper_text = model.transcribe(audio_path)['text']
+
+        #     #clean whisper text
+        #     whisper_text = normalize_text(whisper_text)
+            
+        #     #generate score
+        #     whisper_score = fuzz.ratio(sentence_text, whisper_text)
+
+        #     #save whisper score to text_audio_map
+        #     self.text_audio_map[map_key]['whisper_score'] = whisper_score        
+            
+        #     # Insert score and update text_audio_map
+        #     # Add item to QTableWidget
+        #     whisper_score_item = QTableWidgetItem(str(whisper_score))
+        #     whisper_score_item.setFlags(whisper_score_item.flags() & ~Qt.ItemIsEditable)
+        #     row_position = int(map_key) #self.tableWidget.rowCount()
+        #     self.tableWidget.setItem(row_position, 0, whisper_score_item)
+        #     #save to json file
+        #     self.save_text_audio_map(directory_path)
+
+        #     # Update the progress bar
+        #     self.progress_bar.setValue(self.progress_bar.value() + 1)
+
+
+        total_sentences = len(self.text_audio_map)
+
+        # Set the progress bar maximum value
+        self.progress_bar.setMaximum(total_sentences)
+
+        #set the label text
+        self.header_label2.setText("Whisper Analysis")
+        QApplication.processEvents()  # Ensure the label update is processed immediately
+
+        # Reset the progress bar
+        self.progress_bar.setValue(0)
+
+        for idx in range(total_sentences):
+            map_key = f'{idx}'
+
+            try:
+                test_var = self.text_audio_map[map_key]['whisper_score']
+                
+                if test_var == "":
+                    self.batch_whisper_score(map_key, directory_path, p, model) #call function to process whisper scores
+
+                else:
+                    # Update the progress bar
+                    self.progress_bar.setValue(self.progress_bar.value() + 1)
+            
+            except KeyError:
+                self.batch_whisper_score(self, map_key, directory_path, p, model) #call function to process whisper scores
+
+    def regenerate_audio_by_Whisper_Score(self):
+
+        #setup for saving the scores
+        book_name = self.audiobook_label.text()
+        directory_path = os.path.join("audiobooks", book_name)
+
+        # Load the existing text_audio_map
+        audio_map_path = os.path.join(directory_path, 'text_audio_map.json')
+        with open(audio_map_path, 'r', encoding='utf-8') as file:
+            text_audio_map = json.load(file)
+            self.text_audio_map = text_audio_map
+
+        total_sentences = len(self.text_audio_map)
+        
+        #set target for regeneration
+        whisper_score_target = 90
+        
+        # Set the progress bar maximum value
+        self.progress_bar.setMaximum(total_sentences)
+
+        #set the label text
+        self.header_label2.setText("Regenerating Sentences with Low Score")
+        QApplication.processEvents()  # Ensure the label update is processed immediately
+
+        # Reset the progress bar
+        self.progress_bar.setValue(0)
+
+        #first loop, regen audio
+        for idx in range(total_sentences):
+
+            map_key = f'{idx}'
+            
+            whisper_score = self.text_audio_map[map_key]['whisper_score']
+
+            if whisper_score < whisper_score_target:
+                
+                selected_sentence = self.text_audio_map[map_key]['sentence']['text']
+                old_audio_path = self.text_audio_map[map_key]['audio_path']
+                audio_path_parent = os.path.dirname(old_audio_path)
+                generation_settings_path = os.path.join(audio_path_parent, "generation_settings.json")
+                self.create_generation_settings(generation_settings_path)
+
+                new_audio_path = self.generate_audio(selected_sentence)
+                if not new_audio_path:
+                    QMessageBox.warning(self, "Error", "Failed to generate new audio.")
+                    return
+
+                if os.path.exists(old_audio_path):
+                    os.remove(old_audio_path)
+                self.text_audio_map[map_key]['audio_path'] = new_audio_path
+                
+                # Optionally: If you want to keep the file name the same, you might need to copy 
+                # the new audio file back to the old file path and then delete the new one.
+                shutil.copy(new_audio_path, old_audio_path)
+                os.remove(new_audio_path)
+                self.text_audio_map[map_key]['audio_path'] = old_audio_path
+
+                book_name = self.audiobook_label.text()
+                directory_path = os.path.join("audiobooks", book_name)
+                # Save the updated map back to the file (implement this function)
+                self.save_text_audio_map(directory_path)      
+                
+                # Update the progress bar
+                self.progress_bar.setValue(self.progress_bar.value() + 1)
+
+            else:
+                # Update the progress bar
+                self.progress_bar.setValue(self.progress_bar.value() + 1)
+
+        #2nd loop, time to rescore
+        
+                #set the label text
+        self.header_label2.setText("Loading Whisper Model")
+        QApplication.processEvents()  # Ensure the label update is processed immediately
+
+        # Reset the progress bar
+        self.progress_bar.setValue(0)
+
+        #setup inflect engine
+        p = inflect.engine()
+
+        #load the whisper model    
+        model = whisper.load_model('large')
+
+        #set the label text
+        self.header_label2.setText("Regenerate Scores for new text")
+        QApplication.processEvents()  # Ensure the label update is processed immediately
+
+        for idx in range(total_sentences):
+            map_key = f'{idx}'
+          
+            whisper_score = self.text_audio_map[map_key]['whisper_score']
+
+            if whisper_score < whisper_score_target:
+                self.batch_whisper_score(map_key, directory_path, p, model) #call function to process whisper scores
+            else:
+                # Update the progress bar
+                self.progress_bar.setValue(self.progress_bar.value() + 1)
 
     def load_existing_audiobook(self):
         directory_path = QFileDialog.getExistingDirectory(self, "Select an Audiobook Directory")
@@ -496,14 +793,19 @@ class AudiobookMaker(QMainWindow):
 
             # Insert sentences and update text_audio_map
             for idx_str, item in text_audio_map.items():
-                sentence = item['sentence']
-
+                sentence = item['sentence']['text']
+                whisper_score = item['whisper_score']
+            
                 # Add item to QTableWidget
                 sentence_item = QTableWidgetItem(sentence)
                 sentence_item.setFlags(sentence_item.flags() & ~Qt.ItemIsEditable)
+                whisper_score_item = QTableWidgetItem(str(whisper_score))
+                whisper_score_item.setFlags(whisper_score_item.flags() & ~Qt.ItemIsEditable)
                 row_position = self.tableWidget.rowCount()
                 self.tableWidget.insertRow(row_position)
-                self.tableWidget.setItem(row_position, 0, sentence_item)
+                self.tableWidget.setItem(row_position, 0, whisper_score_item)
+                self.tableWidget.setItem(row_position, 1, sentence_item)
+
 
                 # Update text_audio_map
                 self.text_audio_map[idx_str] = item
@@ -513,11 +815,11 @@ class AudiobookMaker(QMainWindow):
             # Handle other exceptions (e.g., JSON decoding errors)
             QMessageBox.warning(self, "Error", f"An error occurred: {str(e)}")
 
-    def export_audiobook(self): 
+    def export_audiobook(self):
         directory_path = QFileDialog.getExistingDirectory(self, "Select an Audiobook Directory")
         if not directory_path:
             return  # Exit the function if no directory was selected
-        
+    
         dir_name = os.path.basename(directory_path)
         idx = 0
 
@@ -526,46 +828,97 @@ class AudiobookMaker(QMainWindow):
         if not os.path.exists(exported_dir):
             os.makedirs(exported_dir)
 
-        # Find a suitable audio file name with an incrementing suffix
-        while True:
-            new_audiobook_name = f"{dir_name}_audiobook_{idx}.wav"
-            new_audiobook_path = os.path.join(exported_dir, new_audiobook_name)
-            if not os.path.exists(new_audiobook_path):
-                break  # Exit the loop once a suitable name is found
-            idx += 1
+        def update_output_filename(dir_name, exported_dir):
+            idx = 0
+            # Find a suitable audio file name with an incrementing suffix
+            while True:
+                new_audiobook_name = f"{dir_name}_audiobook_{idx}.mp3"
+                new_audiobook_path = os.path.join(exported_dir, new_audiobook_name)
+                if not os.path.exists(new_audiobook_path):
+                    break  # Exit the loop once a suitable name is found
+                idx += 1
+                
+            output_filename = new_audiobook_path
+            return output_filename
 
-        output_filename = new_audiobook_path
+        output_filename = update_output_filename(dir_name,exported_dir)
 
         # Load the JSON file
         audio_map_path = os.path.join(directory_path, 'text_audio_map.json')
         if not os.path.exists(audio_map_path):
             QMessageBox.warning(self, "Error", "The selected directory is not a valid Audiobook Directory. Make sure the text_audio_map.json exists which comes from generating an audio book.")
             return
-        
+
         with open(audio_map_path, 'r', encoding='utf-8') as file:
             text_audio_map = json.load(file)
 
         # Sort the keys (converted to int), then get the corresponding audio paths
         sorted_audio_paths = [text_audio_map[key]['audio_path'] for key in sorted(text_audio_map, key=lambda k: int(k))]
-        
-        combined_audio = AudioSegment.empty()  # Create an empty audio segment
+    
+       # Sort the keys, then get the variable to know if it starts a paragraph
+        First_Sentence = [text_audio_map[key]['sentence']['StartParagraph'] for key in sorted(text_audio_map, key=lambda k: int(k))]
+        FSsilence = AudioSegment.silent(duration=750)
 
-        pause_length = (self.export_pause_slider.value()/10) * 1000 # convert to milliseconds
+        pause_length = (self.export_pause_slider.value() / 10) * 1000  # convert to milliseconds
         silence = AudioSegment.silent(duration=pause_length)  # Create a silent audio segment of pause_length
 
-        for audio_path in sorted_audio_paths:
+        # Set the progress bar maximum value
+        self.progress_bar.setMaximum(len(sorted_audio_paths))
+
+        # Reset the progress bar
+        self.progress_bar.setValue(0)
+
+        #set the label text
+        self.header_label2.setText("Exporting Progress")
+        QApplication.processEvents()  # Ensure the label update is processed immediately
+
+        # Helper function to process an individual audio file
+        def process_audio_segment(audio_path, is_start_paragraph):
             audio_segment = AudioSegment.from_wav(audio_path)
-            combined_audio += audio_segment + silence  # Append the audio segment followed by silence
+            if is_start_paragraph:  # Check if the flag for StartParagraph is true
+                return FSsilence + audio_segment + silence
+            else:
+                return audio_segment + silence  # Append the audio segment followed by silence
 
-        # If you don't want silence after the last segment, you might need to trim it
-        if pause_length > 0:
-            combined_audio = combined_audio[:-pause_length]
+        #def for save a file
+        def save_audio_file(combined_audio,output_filename):
+            # If you don't want silence after the last segment, you might need to trim it
+            if pause_length > 0:
+                combined_audio = combined_audio[:-pause_length]
 
-        # Export the combined audio
-        combined_audio.export(output_filename, format="wav")
+            # Export the combined audio
+            combined_audio.export(output_filename, format="mp3")
 
-        print(f"Combined audiobook saved as {output_filename}")
+            print(f"Combined audiobook saved as {output_filename}")
 
+
+
+        # Split the audio paths into chunks for batch processing
+        chunk_size = 256  # Adjust this value as needed
+        audio_chunks = [sorted_audio_paths[i:i + chunk_size] for i in range(0, len(sorted_audio_paths), chunk_size)]
+        paragraph_chunks = [First_Sentence[i:i + chunk_size] for i in range(0, len(First_Sentence), chunk_size)]
+
+        combined_audio = AudioSegment.empty()  # Create an empty audio segment
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            for audio_chunk, paragraph_chunk in zip(audio_chunks, paragraph_chunks):
+                future_to_audio = {executor.submit(process_audio_segment, audio_path, is_start_paragraph): i for i, (audio_path, is_start_paragraph) in enumerate(zip(audio_chunk, paragraph_chunk))}
+            
+                batch_combined_audio = AudioSegment.empty()
+                for i, future in enumerate(concurrent.futures.as_completed(future_to_audio)):
+                    batch_combined_audio += future.result()
+                    # Update the progress bar
+                    self.progress_bar.setValue(self.progress_bar.value() + 1)
+                    QApplication.processEvents()
+                output_filename = update_output_filename(dir_name,exported_dir)
+                save_audio_file(batch_combined_audio,output_filename)
+                    #save_audio_file(batch_combined_audio,output_filename)
+                #combined_audio += batch_combined_audio
+
+        #output_filename = update_output_filename(dir_name,exported_dir)
+        #save_audio_file(combined_audio,output_filename)
+        # # Reset the progress bar
+        # self.progress_bar.setValue(0)
 
     def update_audiobook(self):
         options = QFileDialog.Options()
@@ -693,7 +1046,6 @@ class AudiobookMaker(QMainWindow):
         self.worker.progress_signal.connect(self.progress_bar.setValue)
         self.worker.start()
 
-
     def set_background_image(self):
         options = QFileDialog.Options()
         options |= QFileDialog.ReadOnly
@@ -742,7 +1094,7 @@ class AudiobookMaker(QMainWindow):
 
         # Iterate through each entry in the map
         for idx, entry in text_audio_map.items():
-            sentence = entry['sentence']
+            sentence = entry['sentence']['text']
             new_audio_path = entry['audio_path']
             generated = entry['generated']
             
@@ -777,7 +1129,7 @@ class AudiobookMaker(QMainWindow):
                 sentence_item.setFlags(sentence_item.flags() & ~Qt.ItemIsEditable)
                 row_position = self.tableWidget.rowCount()
                 self.tableWidget.insertRow(row_position)
-                self.tableWidget.setItem(row_position, 0, sentence_item)
+                self.tableWidget.setItem(row_position, 1, sentence_item)
                 self.text_audio_map[str(idx)] = {"sentence": sentence, "audio_path": new_audio_path, "generated": text_audio_map[idx]['generated']}
             
             # Report progress
@@ -822,7 +1174,6 @@ class AudiobookMaker(QMainWindow):
             else:
                 return -1
         
-
     def play_audio_by_index(self, idx):
         if idx < self.tableWidget.rowCount():
             # Retrieve the sentence from the table
@@ -885,7 +1236,8 @@ class AudiobookMaker(QMainWindow):
         for idx, sentence in enumerate(sentences_list):
             generated = False
             audio_path = ""
-            new_text_audio_map[str(idx)] = {"sentence": sentence, "audio_path": audio_path, "generated": generated}
+            whisper_score = ""
+            new_text_audio_map[str(idx)] = {"sentence": sentence, "audio_path": audio_path, "generated": generated, "whisper_score": whisper_score }
             self.save_json(audio_map_path, new_text_audio_map)
 
     def create_generation_settings(self, generation_settings_path):
@@ -981,7 +1333,8 @@ class AudiobookMaker(QMainWindow):
     def disable_buttons(self):
         buttons = [self.regenerate_button, 
                 self.generate_button, 
-                self.continue_audiobook_button]
+                self.continue_audiobook_button,
+                self.whisper_check_all_button]
         actions = [self.load_audiobook_action,
                 self.export_audiobook_action,
                 self.update_audiobook_action]
@@ -996,7 +1349,8 @@ class AudiobookMaker(QMainWindow):
     def enable_buttons(self):
         buttons = [self.regenerate_button, 
                 self.generate_button, 
-                self.continue_audiobook_button]
+                self.continue_audiobook_button,
+                self.whisper_check_all_button]
         actions = [self.load_audiobook_action,
                 self.export_audiobook_action,
                 self.update_audiobook_action]
@@ -1008,6 +1362,58 @@ class AudiobookMaker(QMainWindow):
         for action in actions:
             action.setDisabled(False)
 
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#   Whisper Score Utilites
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    def number_to_words(self, number, p):    
+        #function to convert a number to words
+        return p.number_to_words(int(number))
+    
+    def remove_bracketed_text(self, text):
+        #function to remove brackets
+        return re.sub(r'\s*\[.*?\]', '', text)
+    
+    def normalize_text(self, text, p):
+        #function to normalize text by removing punctuation and converting to lowercase
+        text = text.lower() #lower case
+        text = re.sub(r'\b\d+\b', lambda x, p=p: self.number_to_words(x.group(),p), text)
+        text = re.sub(r'[^\w\s]', '', text) #remove punctuation
+        text = text.strip() #remove leading and trailing whitespace
+        return text
+
+    def batch_whisper_score(self, map_key, directory_path, p, model):
+        #set up variables
+        audio_path = self.text_audio_map[map_key]['audio_path']
+        sentence_text = self.text_audio_map[map_key]['sentence']['text']
+
+        #clean up the text
+        sentence_text = self.remove_bracketed_text(sentence_text)
+        sentence_text = self.normalize_text(sentence_text, p)
+
+        #transcribe the audio file
+        whisper_text = model.transcribe(audio_path)['text']
+
+        #clean whisper text
+        whisper_text = self.normalize_text(whisper_text, p)
+        
+        #generate score
+        whisper_score = fuzz.ratio(sentence_text, whisper_text)
+
+        #save whisper score to text_audio_map
+        self.text_audio_map[map_key]['whisper_score'] = whisper_score        
+        
+        # Insert score and update text_audio_map
+        # Add item to QTableWidget
+        whisper_score_item = QTableWidgetItem(str(whisper_score))
+        whisper_score_item.setFlags(whisper_score_item.flags() & ~Qt.ItemIsEditable)
+        row_position = int(map_key) #self.tableWidget.rowCount()
+        self.tableWidget.setItem(row_position, 0, whisper_score_item)
+        #save to json file
+        self.save_text_audio_map(directory_path)
+
+        # Update the progress bar
+        self.progress_bar.setValue(self.progress_bar.value() + 1)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

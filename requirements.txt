@@ -5,3 +5,8 @@ requests
 pyyaml
 pyqt5
 nltk
+pyenchant
+openai-whisper
+fuzzywuzzy
+python-Levenshtein
+inflect

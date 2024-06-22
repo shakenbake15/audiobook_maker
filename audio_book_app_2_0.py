@@ -239,6 +239,29 @@ class AudiobookMaker(QMainWindow):
         self.whisper_check_all_button.clicked.connect(self.whisper_analyze_all)
         left_layout.addWidget(self.whisper_check_all_button)
 
+        # -- Whisper Sensitivity Slider
+        self.whisper_target_value_label = QLabel("90")  # 0 is the initial value of the slider
+        max_value_str = "99"  # the maximum value the label will show
+        estimated_width = len(max_value_str) * 20
+
+        self.whisper_target_value_label.setFixedWidth(estimated_width)
+        self.whisper_target_layout = QHBoxLayout()
+        self.whisper_target_label = QLabel("Target Score: ")
+        self.whisper_target_slider = QSlider(Qt.Horizontal)
+        self.whisper_target_slider.setMinimum(70)
+        self.whisper_target_slider.setMaximum(99)
+        self.whisper_target_slider.setValue(90)
+        self.whisper_target_slider.setTickPosition(QSlider.TicksBelow)
+        self.whisper_target_slider.setTickInterval(1)
+
+        self.whisper_target_slider.valueChanged.connect(self.updateWhisperTargetLabel)
+
+        self.whisper_target_layout.addWidget(self.whisper_target_label)
+        self.whisper_target_layout.addWidget(self.whisper_target_slider)
+        self.whisper_target_layout.addWidget(self.whisper_target_value_label)
+
+        left_layout.addLayout(self.whisper_target_layout)
+
         # -- Regenerate Lines by Whisper Score
         self.whisper_regenerate_button = QPushButton("Regenerate Audio by Whisper Score", self)
         self.whisper_regenerate_button.clicked.connect(self.regenerate_audio_by_Whisper_Score)
@@ -254,19 +277,6 @@ class AudiobookMaker(QMainWindow):
         self.progress_bar.setValue(0)
         left_layout.addWidget(self.progress_bar)
         left_layout.addStretch(1)  # Add stretchable empty space
-
-        # Create a QLabel for the header text
-        #header_label = QLabel("Export Loading Bar", self)
-        #header_label.setStyleSheet("font-size: 14px; font-weight: bold;")  # Example: Styling the label
-        #left_layout.addWidget(header_label)
-
-        # # Create a progress bar
-        # self.progress = QProgressBar(self)
-        # #self.progress.setGeometry(30, 40, 200, 25)  # Adjust the geometry as needed
-        # self.progress.setMaximum(100)
-        # self.progress.setValue(0)
-        # left_layout.addWidget(self.progress)
-        #left_layout.addStretch(1)
 
         # Right side Widget
         right_layout = QVBoxLayout()
@@ -587,56 +597,6 @@ class AudiobookMaker(QMainWindow):
         #load the whisper model    
         model = whisper.load_model('large')
 
-        # #function to convert a number to words
-        # def number_to_words(number):
-        #     return p.number_to_words(int(number))
-        
-        # #function to remove brackets
-        # def remove_bracketed_text(text):
-        #     return re.sub(r'\s*\[.*?\]', '', text)
-
-        # #function to normalize text by removing punctuation and converting to lowercase
-        # def normalize_text(text):
-        #     text = text.lower() #lower case
-        #     text = re.sub(r'\b\d+\b', lambda x: number_to_words(x.group()), text)
-        #     text = re.sub(r'[^\w\s]', '', text) #remove punctuation
-        #     text = text.strip() #remove leading and trailing whitespace
-        #     return text
-
-        # def batch_whisper_score(self, map_key, directory_path):
-        #     #set up variables
-        #     audio_path = self.text_audio_map[map_key]['audio_path']
-        #     sentence_text = self.text_audio_map[map_key]['sentence']['text']
-
-        #     #clean up the text
-        #     sentence_text = remove_bracketed_text(sentence_text)
-        #     sentence_text = normalize_text(sentence_text)
-
-        #     #transcribe the audio file
-        #     whisper_text = model.transcribe(audio_path)['text']
-
-        #     #clean whisper text
-        #     whisper_text = normalize_text(whisper_text)
-            
-        #     #generate score
-        #     whisper_score = fuzz.ratio(sentence_text, whisper_text)
-
-        #     #save whisper score to text_audio_map
-        #     self.text_audio_map[map_key]['whisper_score'] = whisper_score        
-            
-        #     # Insert score and update text_audio_map
-        #     # Add item to QTableWidget
-        #     whisper_score_item = QTableWidgetItem(str(whisper_score))
-        #     whisper_score_item.setFlags(whisper_score_item.flags() & ~Qt.ItemIsEditable)
-        #     row_position = int(map_key) #self.tableWidget.rowCount()
-        #     self.tableWidget.setItem(row_position, 0, whisper_score_item)
-        #     #save to json file
-        #     self.save_text_audio_map(directory_path)
-
-        #     # Update the progress bar
-        #     self.progress_bar.setValue(self.progress_bar.value() + 1)
-
-
         total_sentences = len(self.text_audio_map)
 
         # Set the progress bar maximum value
@@ -680,7 +640,7 @@ class AudiobookMaker(QMainWindow):
         total_sentences = len(self.text_audio_map)
         
         #set target for regeneration
-        whisper_score_target = 90
+        whisper_score_target = self.whisper_target_slider.value()
         
         # Set the progress bar maximum value
         self.progress_bar.setMaximum(total_sentences)
@@ -736,7 +696,7 @@ class AudiobookMaker(QMainWindow):
 
         #2nd loop, time to rescore
         
-                #set the label text
+        #set the label text
         self.header_label2.setText("Loading Whisper Model")
         QApplication.processEvents()  # Ensure the label update is processed immediately
 
@@ -1322,6 +1282,9 @@ class AudiobookMaker(QMainWindow):
     def updateVoicePitchLabel(self, value):
         self.voice_pitch_value_label.setText(str(value))
     
+    def updateWhisperTargetLabel(self, value):
+        self.whisper_target_value_label.setText(str(value))
+
     def updateVoiceIndexLabel(self, value):
         value = (self.voice_index_slider.value() / 100)
         self.voice_index_value_label.setText(str(value))

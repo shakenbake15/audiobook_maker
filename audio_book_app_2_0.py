@@ -403,6 +403,10 @@ class AudiobookMaker(QMainWindow):
                         return
                 else:
                     return
+            #set the label text
+            self.header_label2.setText("Parsing Text")
+            QApplication.processEvents()  # Ensure the label update is processed immediately
+            
             os.makedirs(directory_path)
             self.tableWidget.setRowCount(0)
             self.text_audio_map.clear()
@@ -652,6 +656,10 @@ class AudiobookMaker(QMainWindow):
         # Reset the progress bar
         self.progress_bar.setValue(0)
 
+        #set tracking variables
+        regenerated_line_numbers = []
+        not_fixed_lines = []
+
         #first loop, regen audio
         for idx in range(total_sentences):
 
@@ -661,6 +669,7 @@ class AudiobookMaker(QMainWindow):
 
             if whisper_score < whisper_score_target:
                 
+                regenerated_line_numbers.append(f'{idx} ')
                 selected_sentence = self.text_audio_map[map_key]['sentence']['text']
                 old_audio_path = self.text_audio_map[map_key]['audio_path']
                 audio_path_parent = os.path.dirname(old_audio_path)
@@ -720,9 +729,16 @@ class AudiobookMaker(QMainWindow):
 
             if whisper_score < whisper_score_target:
                 self.batch_whisper_score(map_key, directory_path, p, model) #call function to process whisper scores
+                new_whisper_score = self.text_audio_map[map_key]['whisper_score']
+                if new_whisper_score < whisper_score_target:
+                    not_fixed_lines.append(f'{idx }')
             else:
                 # Update the progress bar
                 self.progress_bar.setValue(self.progress_bar.value() + 1)
+        
+        #print tracking info
+        print(f"Regenerated lines: {regenerated_line_numbers}")
+        print(f'Regerenated, but not fixed {not_fixed_lines}')
 
     def load_existing_audiobook(self):
         directory_path = QFileDialog.getExistingDirectory(self, "Select an Audiobook Directory")

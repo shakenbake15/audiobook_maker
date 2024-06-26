@@ -140,6 +140,8 @@ import re
 import os #ADDED
 import nltk #ADDED
 import enchant #ADDED
+import roman #ADDED
+import inflect #ADDED
 
 def filter_paragraph(paragraph):
     
@@ -166,6 +168,75 @@ def filter_paragraph(paragraph):
         def ends_with_abbreviation(sentence):
             return re.search(r'\b[A-Z](?:\.[A-Z])+[\.]?["\']?$', sentence)
         
+        # convert roman numerals to words
+        def roman_to_words(roman_numeral):
+            try:
+                number = roman.fromRoman(roman_numeral)
+                p =inflect.engine()
+                return p.number_to_words(number)
+            except roman.InvalidRomanNumeralError:
+                return roman_numeral
+        
+        #convert year to words
+        def year_to_words(year):
+            p = inflect.engine()
+            year_str = str(year)
+            
+            if len(year_str) == 4:
+                if year_str[2:] == "00":
+                    return p.number_to_words(year)
+                else:
+                    first_part = p.number_to_words(year_str[:2])
+                    second_part = p.number_to_words(year_str[2:])
+                    if year_str[2] == '0':
+                        second_part = 'o ' + p.number_to_words(year_str[2:])
+                    return f"{first_part} {second_part}"
+            # elif len(year_str) == 3:
+            #     middle_word == str('')
+            #     if year_str[1] == '0':
+            #         middle_word = 'o '
+            #     return f"{p.number_to_words(year_str[0])} {middle_word} {p.number_to_words(year_str[1:])}"
+            # elif len(year_str) == 2:
+            #     return p.number_to_words(year)
+            else:
+                return p.number_to_words(year)
+
+        #find roman numerals and years, replace, then replace the rest of the numbers.
+        def convert_numerals_and_years(text):
+            p = inflect.engine()
+            
+            # Regex for Roman numerals (simple version)
+            roman_pattern = re.compile(r'\b[MCDXLIV]+\b', re.IGNORECASE)
+            # Regex for years (assuming years between 1000 and 2999 for simplicity)
+            year_pattern = re.compile(r'\b(1[0-9]{3}|2[0-9]{3})\b')
+            # Regex for other numbers
+            number_pattern = re.compile(r'\b\d+\b')
+            
+            # Function to replace Roman numerals with words
+            def replace_roman(match):
+                roman_numeral = match.group(0)
+                return roman_to_words(roman_numeral.upper())
+
+            # Function to replace years with words
+            def replace_year(match):
+                year = int(match.group(0))
+                return year_to_words(year)
+            
+            # Function to replace other numbers with words
+            def replace_number(match):
+                number = int(match.group(0))
+                return p.number_to_words(number)
+            
+            # Replace Roman numerals
+            #text = re.sub(roman_pattern, replace_roman, text)
+            # Replace years
+            text = re.sub(year_pattern, replace_year, text)
+            # Replace other numbers
+            text = re.sub(number_pattern, replace_number, text)
+    
+            return text
+
+
         Short_Trigger = False
         i = 0
         while i < len(sentences):
@@ -175,6 +246,9 @@ def filter_paragraph(paragraph):
             
             # Remove square brackets and strip the sentence
             line_content = re.sub(r'\[|\]', '', sentences[i]).strip()
+
+            # Run function to replace roman numerals and years with text
+            line_content = convert_numerals_and_years(line_content)
 
             # remove elipses or other consecutive periods
             line_content = re.sub(r'\.{2,}|…|\. \.', '.', line_content)
@@ -188,15 +262,9 @@ def filter_paragraph(paragraph):
             # Replace periods in acronyms with spaces
             line_content = re.sub(r'\b([A-Z](?:\.[A-Z])+)\b', lambda match: match.group(1).replace('.', ' '), line_content)
 
-            # Replace sequences of consecutive capital letters without periods with spaces
-            #line_content = re.sub(r'\b((?:[A-Z]+)+)\b', lambda match: match.group(1).replace('', ' '), line_content)
-
             # Replace sequences of consecutive capital letters without periods with spaces only if not spelled correctly
             line_content = re.sub(r'\b((?:[A-Z]+)+)\b', lambda match: match.group(1).replace('', ' ') if not spell_checker.check(match.group(1)) else match.group(1), line_content)
-           
-            #testing
-            #line_content = f"{i}: {line}"  # Add the index to the line content
-            
+                      
             if i == 0:  # If it's the first line in the paragraph
                 #if line_content and any(c.isalpha() for c in line_content):
                 StartParagraph = True
@@ -206,7 +274,7 @@ def filter_paragraph(paragraph):
                 StartParagraph = True
                 Short_Trigger = False
 
-            # Check if the sentence is shorter than 7 words, add " [lengthen a few words]." 
+             # Check if the sentence is shorter than 7 words, add " [lengthen a few words]." 
             if len(line_content.split()) < 7:
                 if i + 1 < len(sentences):
                     sentences[i+1] = line_content + " " + sentences[i+1]

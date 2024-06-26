@@ -22,7 +22,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import concurrent.futures
 
 from pydub import AudioSegment
-from PyQt5.QtWidgets import QSlider, QWidgetAction, QComboBox, QApplication, QMainWindow, QListWidget, QPushButton, QVBoxLayout, QFileDialog, QLineEdit, QLabel, QWidget, QMessageBox, QHeaderView, QProgressBar, QHBoxLayout, QTableWidget, QTableWidgetItem, QAction, QDesktopWidget
+from PyQt5.QtWidgets import QSlider, QWidgetAction, QComboBox, QApplication, QMainWindow, QListWidget, QPushButton, QVBoxLayout, QFileDialog, QLineEdit, QLabel, QWidget, QMessageBox, QHeaderView, QProgressBar, QHBoxLayout, QTableWidget, QTableWidgetItem, QAction, QDesktopWidget, QCheckBox
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
 from PyQt5.QtCore import QUrl, QThread, pyqtSignal, Qt
 from PyQt5.QtGui import QFont
@@ -32,6 +32,7 @@ import whisper
 import re
 from fuzzywuzzy import fuzz
 import inflect
+import roman
 
 # Get the directory of the currently executed script
 script_directory = os.path.dirname(os.path.realpath(__file__))
@@ -105,6 +106,11 @@ class AudiobookMaker(QMainWindow):
         self.book_name_input = QLineEdit(self)
         self.book_layout.addWidget(self.book_name_input)
         left_layout.addLayout(self.book_layout)
+
+        # -- Checkbox for RVC
+        self.rvc_checkbox = QCheckBox("Enable RVC", self)
+        self.rvc_checkbox.setStyleSheet("font-size: 14pt; color: #eee;")
+        left_layout.addWidget(self.rvc_checkbox)
 
         # -- Voice Name Combo Box
         self.voice_name_layout = QHBoxLayout()
@@ -224,10 +230,10 @@ class AudiobookMaker(QMainWindow):
         self.regenerate_button.clicked.connect(self.regenerate_audio_for_sentence)
         left_layout.addWidget(self.regenerate_button)
 
-        # # -- Whisper Check Line Button
-        # self.whisper_check_button = QPushButton("Whisper Check Selected", self)
-        # self.whisper_check_button.clicked.connect(self.whisper_analyze)
-        # left_layout.addWidget(self.whisper_check_button)
+        # -- Whisper Check Line Button
+        self.whisper_check_button = QPushButton("Whisper Check Selected", self)
+        self.whisper_check_button.clicked.connect(self.whisper_analyze)
+        left_layout.addWidget(self.whisper_check_button)
 
         # -- Continue Audiobook Generation Button
         self.continue_audiobook_button = QPushButton("Continue Audiobook Generation", self)
@@ -295,6 +301,7 @@ class AudiobookMaker(QMainWindow):
         self.tableWidget.setHorizontalHeaderLabels(['Whisper Score','Sentence'])
         self.tableWidget.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.tableWidget.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.tableWidget.itemChanged.connect(self.on_text_edited)
         right_layout.addWidget(self.tableWidget)
 
         main_layout.addLayout(right_layout)
@@ -494,7 +501,8 @@ class AudiobookMaker(QMainWindow):
             QMessageBox.warning(self, "Error", "Choose a sentence.")
             return
 
-        map_key = str(selected_row)
+        #map_key = str(selected_row)
+        map_key = f"{selected_row}"
         if not self.text_audio_map[map_key]['generated']:
             QMessageBox.warning(self, "Error", f'No audio path found, generate sentences with "Continue Audiobook" first before regenerating. This may have occured if you updated the audiobook and did not opt to generate new sentences')
             return
@@ -526,7 +534,6 @@ class AudiobookMaker(QMainWindow):
         self.save_text_audio_map(directory_path)
 
     def whisper_analyze(self):
-
 
         selected_row = self.tableWidget.currentRow()
         if selected_row == -1:  # No row is selected
@@ -562,8 +569,9 @@ class AudiobookMaker(QMainWindow):
             return text
         
         #clean up the text
-        sentence_text = remove_bracketed_text(sentence_text)
-        sentence_text = normalize_text(sentence_text)
+        sentence_text = self.remove_bracketed_text(sentence_text)
+        sentence_text = self.normalize_text(sentence_text, p)
+
 
         #load the whisper model    
         model = whisper.load_model('large')
@@ -669,7 +677,7 @@ class AudiobookMaker(QMainWindow):
 
             if whisper_score < whisper_score_target:
                 
-                regenerated_line_numbers.append(f'{idx} ')
+                regenerated_line_numbers.append(f'{idx+1}')
                 selected_sentence = self.text_audio_map[map_key]['sentence']['text']
                 old_audio_path = self.text_audio_map[map_key]['audio_path']
                 audio_path_parent = os.path.dirname(old_audio_path)
@@ -731,7 +739,7 @@ class AudiobookMaker(QMainWindow):
                 self.batch_whisper_score(map_key, directory_path, p, model) #call function to process whisper scores
                 new_whisper_score = self.text_audio_map[map_key]['whisper_score']
                 if new_whisper_score < whisper_score_target:
-                    not_fixed_lines.append(f'{idx }')
+                    not_fixed_lines.append(f'{idx+1}')
             else:
                 # Update the progress bar
                 self.progress_bar.setValue(self.progress_bar.value() + 1)
@@ -774,9 +782,9 @@ class AudiobookMaker(QMainWindow):
             
                 # Add item to QTableWidget
                 sentence_item = QTableWidgetItem(sentence)
-                sentence_item.setFlags(sentence_item.flags() & ~Qt.ItemIsEditable)
+                sentence_item.setFlags(sentence_item.flags() | Qt.ItemIsEditable)
                 whisper_score_item = QTableWidgetItem(str(whisper_score))
-                whisper_score_item.setFlags(whisper_score_item.flags() & ~Qt.ItemIsEditable)
+                whisper_score_item.setFlags(whisper_score_item.flags() | Qt.ItemIsEditable)
                 row_position = self.tableWidget.rowCount()
                 self.tableWidget.insertRow(row_position)
                 self.tableWidget.setItem(row_position, 0, whisper_score_item)
@@ -905,8 +913,9 @@ class AudiobookMaker(QMainWindow):
 
         self.tableWidget.setRowCount(0)
         self.text_audio_map.clear()
-        sentence_list = load_sentences(filePath)
-        
+        sentence_list_export = load_sentences(filePath) # new parse
+        sentence_list = [sentence['text'] for sentence in load_sentences(filePath)]
+
         reply = QMessageBox.warning(self, 'Update Existing Audiobook', "This will delete audio for existing sentences if they have been modified as well. Do you want to proceed?", 
                                             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.Yes:
@@ -930,7 +939,8 @@ class AudiobookMaker(QMainWindow):
         with open(audio_map_path, 'r', encoding='utf-8') as file:
             text_audio_map = json.load(file)
 
-        reverse_map = {item['sentence']: idx for idx, item in text_audio_map.items()}
+        reverse_map = {item['sentence']['text']: idx for idx, item in text_audio_map.items()}
+        reverse_map_export = text_audio_map  # from file
 
         generate_new_audio_reply = QMessageBox.question(self, 
                                     'Generate New Audio', 
@@ -944,13 +954,17 @@ class AudiobookMaker(QMainWindow):
         deleted_sentences = set(text_audio_map.keys()) 
         for new_idx, sentence in enumerate(sentence_list):
             if sentence in reverse_map:  # Sentence exists in old map
-                old_idx = reverse_map[sentence]
-                new_text_audio_map[str(new_idx)] = text_audio_map[old_idx]
-                deleted_sentences.discard(old_idx)  # Remove index from set of deleted sentences
+                print("reverse map export: ", reverse_map_export)
+                old_idx = reverse_map_export[f'{new_idx}']
+                print(f'{old_idx}')
+                new_text_audio_map[str(new_idx)] = old_idx
+                #deleted_sentences.discard(old_idx)  # Remove index from set of deleted sentences
             else:  # New sentence
+                sentence_export = sentence_list_export[new_idx]
                 generated = False
                 new_audio_path = ""
-                new_text_audio_map[str(new_idx)] = {"sentence": sentence, "audio_path": new_audio_path, "generated": generated}
+                whisper_score = ""
+                new_text_audio_map[str(new_idx)] = {"sentence": sentence_export, "audio_path": new_audio_path, "generated": generated, "whisper_score": whisper_score}
                 self.save_json(audio_map_path, new_text_audio_map)
 
         # Handle deleted sentences and their audio files
@@ -1114,19 +1128,22 @@ class AudiobookMaker(QMainWindow):
             
     def generate_audio(self, sentence):
         audio_path = self.tortoise.call_api(sentence)
-        selected_voice = self.voice_models_combo.currentText()
-        selected_index = self.voice_index_combo.currentText()
-        voice_model_path = os.path.join(self.voice_folder_path, selected_voice)
-        voice_index_path = os.path.join(self.index_folder_path, selected_index)
+        #RVC section
+        if self.rvc_checkbox.isChecked():
+            selected_voice = self.voice_models_combo.currentText()
+            selected_index = self.voice_index_combo.currentText()
+            voice_model_path = os.path.join(self.voice_folder_path, selected_voice)
+            voice_index_path = os.path.join(self.index_folder_path, selected_index)
         
-        f0_pitch = self.voice_pitch_slider.value()
-        index_rate = (self.voice_index_slider.value()/100)
-        audio_path = rvc_convert(model_path=voice_model_path, 
-                                 f0_up_key=f0_pitch, 
-                                 resample_sr=0, 
-                                 file_index=voice_index_path,
-                                 index_rate=index_rate,
-                                 input_path=audio_path)
+            f0_pitch = self.voice_pitch_slider.value()
+            index_rate = (self.voice_index_slider.value()/100)
+            audio_path = rvc_convert(model_path=voice_model_path, 
+                                f0_up_key=f0_pitch, 
+                                resample_sr=0, 
+                                file_index=voice_index_path,
+                                index_rate=index_rate,
+                                input_path=audio_path)
+        #end of RVC section
         if audio_path:
             return audio_path
         else:
@@ -1341,14 +1358,95 @@ class AudiobookMaker(QMainWindow):
         for action in actions:
             action.setDisabled(False)
 
+    def on_text_edited(self, item):
+        row = item.row()
+        new_text = item.text()
+        map_key = str(row)
+        
+        if map_key in self.text_audio_map:
+            self.text_audio_map[map_key]['sentence']['text'] = new_text
+            
+            # Save the updated map back to the file
+            book_name = self.audiobook_label.text()
+            directory_path = os.path.join("audiobooks", book_name)
+            self.save_text_audio_map(directory_path)
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #   Whisper Score Utilites
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     def number_to_words(self, number, p):    
         #function to convert a number to words
-        return p.number_to_words(int(number))
+        #return p.number_to_words(int(number))
     
+            # convert roman numerals to words
+        def roman_to_words(roman_numeral):
+            try:
+                number = roman.fromRoman(roman_numeral)
+                p =inflect.engine()
+                return p.number_to_words(number)
+            except roman.InvalidRomanNumeralError:
+                return roman_numeral
+        
+        #convert year to words
+        def year_to_words(year):
+            p = inflect.engine()
+            year_str = str(year)
+            
+            if len(year_str) == 4:
+                if year_str[2:] == "00":
+                    return p.number_to_words(year)
+                else:
+                    first_part = p.number_to_words(year_str[:2])
+                    second_part = p.number_to_words(year_str[2:])
+                    if year_str[2] == '0':
+                        second_part = 'o ' + p.number_to_words(year_str[2:])
+                    return f"{first_part} {second_part}"
+            # elif len(year_str) == 3:
+            #     middle_word == str('')
+            #     if year_str[1] == '0':
+            #         middle_word = 'o '
+            #     return f"{p.number_to_words(year_str[0])} {middle_word} {p.number_to_words(year_str[1:])}"
+            # elif len(year_str) == 2:
+            #     return p.number_to_words(year)
+            else:
+                return p.number_to_words(year)
+
+        #find roman numerals and years, replace, then replace the rest of the numbers.
+        def convert_numerals_and_years(text):
+            p = inflect.engine()
+            
+            # Regex for Roman numerals (simple version)
+            roman_pattern = re.compile(r'\b[MCDXLIV]+\b', re.IGNORECASE)
+            # Regex for years (assuming years between 1000 and 2999 for simplicity)
+            year_pattern = re.compile(r'\b(1[0-9]{3}|2[0-9]{3})\b')
+            # Regex for other numbers
+            number_pattern = re.compile(r'\b\d+\b')
+            
+            # Function to replace Roman numerals with words
+            def replace_roman(match):
+                roman_numeral = match.group(0)
+                return roman_to_words(roman_numeral.upper())
+
+            # Function to replace years with words
+            def replace_year(match):
+                year = int(match.group(0))
+                return year_to_words(year)
+            
+            # Function to replace other numbers with words
+            def replace_number(match):
+                number = int(match.group(0))
+                return p.number_to_words(number)
+            
+            # Replace Roman numerals
+            #text = re.sub(roman_pattern, replace_roman, text)
+            # Replace years
+            text = re.sub(year_pattern, replace_year, text)
+            # Replace other numbers
+            text = re.sub(number_pattern, replace_number, text)
+    
+            return text
+        return convert_numerals_and_years(number)
+
     def remove_bracketed_text(self, text):
         #function to remove brackets
         return re.sub(r'\s*\[.*?\]', '', text)
@@ -1356,7 +1454,7 @@ class AudiobookMaker(QMainWindow):
     def normalize_text(self, text, p):
         #function to normalize text by removing punctuation and converting to lowercase
         text = text.lower() #lower case
-        text = re.sub(r'\b\d+\b', lambda x, p=p: self.number_to_words(x.group(),p), text)
+        text = re.sub(r'\b\d+\b', lambda x, p=p: self.number_to_words(x.group(),p), text) #numbers to words
         text = re.sub(r'[^\w\s]', '', text) #remove punctuation
         text = text.strip() #remove leading and trailing whitespace
         return text

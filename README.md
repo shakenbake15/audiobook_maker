@@ -107,3 +107,9 @@ I am able to build these tools thanks to all of the fantastic open source repos 
 - mrq's AI Voice Cloning / Tortoise branch: https://git.ecker.tech/mrq/ai-voice-cloning
 - Retrieval Based Voice Conversion: https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI
 - OpenAI's ChatGPT for rapid development and prototyping, speeding up implementation and brainstorming by tenfolds
+
+To Do...
+fix roman numeral logic
+Fix UI issues, buttons disabling, etc.
+fix play from selected
+fix the update from file in file menu

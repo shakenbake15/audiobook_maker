@@ -9,4 +9,5 @@ pyenchant
 openai-whisper
 fuzzywuzzy
 python-Levenshtein
+roman
 inflect

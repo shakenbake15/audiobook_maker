@@ -784,7 +784,7 @@ class AudiobookMaker(QMainWindow):
                 sentence_item = QTableWidgetItem(sentence)
                 sentence_item.setFlags(sentence_item.flags() | Qt.ItemIsEditable)
                 whisper_score_item = QTableWidgetItem(str(whisper_score))
-                whisper_score_item.setFlags(whisper_score_item.flags() | Qt.ItemIsEditable)
+                whisper_score_item.setFlags(whisper_score_item.flags() & ~Qt.ItemIsEditable)
                 row_position = self.tableWidget.rowCount()
                 self.tableWidget.insertRow(row_position)
                 self.tableWidget.setItem(row_position, 0, whisper_score_item)
@@ -1116,7 +1116,7 @@ class AudiobookMaker(QMainWindow):
             # If generated is true (either was already or just now), add to table
             if text_audio_map[idx]['generated']:
                 sentence_item = QTableWidgetItem(sentence)
-                sentence_item.setFlags(sentence_item.flags() & ~Qt.ItemIsEditable)
+                sentence_item.setFlags(sentence_item.flags() | Qt.ItemIsEditable)
                 row_position = self.tableWidget.rowCount()
                 self.tableWidget.insertRow(row_position)
                 self.tableWidget.setItem(row_position, 1, sentence_item)
@@ -1359,17 +1359,18 @@ class AudiobookMaker(QMainWindow):
             action.setDisabled(False)
 
     def on_text_edited(self, item):
-        row = item.row()
-        new_text = item.text()
-        map_key = str(row)
-        
-        if map_key in self.text_audio_map:
-            self.text_audio_map[map_key]['sentence']['text'] = new_text
+        if item.column() == 1:  # Only process edits in the sentence column
+            row = item.row()
+            new_text = item.text()
+            map_key = str(row)
             
-            # Save the updated map back to the file
-            book_name = self.audiobook_label.text()
-            directory_path = os.path.join("audiobooks", book_name)
-            self.save_text_audio_map(directory_path)
+            if map_key in self.text_audio_map:
+                self.text_audio_map[map_key]['sentence']['text'] = new_text
+                
+                # Save the updated map back to the file
+                book_name = self.audiobook_label.text()
+                directory_path = os.path.join("audiobooks", book_name)
+                self.save_text_audio_map(directory_path)
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #   Whisper Score Utilites
@@ -1479,14 +1480,16 @@ class AudiobookMaker(QMainWindow):
 
         #save whisper score to text_audio_map
         self.text_audio_map[map_key]['whisper_score'] = whisper_score        
-        
+
+        # Update the QTableWidget
+        row_position = int(map_key)
+
         # Insert score and update text_audio_map
         # Add item to QTableWidget
         whisper_score_item = QTableWidgetItem(str(whisper_score))
         whisper_score_item.setFlags(whisper_score_item.flags() & ~Qt.ItemIsEditable)
-        row_position = int(map_key) #self.tableWidget.rowCount()
         self.tableWidget.setItem(row_position, 0, whisper_score_item)
-        #save to json file
+
         self.save_text_audio_map(directory_path)
 
         # Update the progress bar

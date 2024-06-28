@@ -27,6 +27,7 @@ from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
 from PyQt5.QtCore import QUrl, QThread, pyqtSignal, Qt
 from PyQt5.QtGui import QFont
 from PyQt5.QtGui import QPixmap, QPalette, QBrush
+from PyQt5 import QtGui
 
 import whisper
 import re
@@ -244,7 +245,12 @@ class AudiobookMaker(QMainWindow):
         self.whisper_check_all_button = QPushButton("Whisper Check All", self)
         self.whisper_check_all_button.clicked.connect(self.whisper_analyze_all)
         left_layout.addWidget(self.whisper_check_all_button)
-
+        
+        # -- Checkbox for RVC
+        self.force_whisper_checkbox = QCheckBox("Force Whisper Rescore", self)
+        self.force_whisper_checkbox.setStyleSheet("font-size: 14pt; color: #eee;")
+        left_layout.addWidget(self.force_whisper_checkbox)
+        
         # -- Whisper Sensitivity Slider
         self.whisper_target_value_label = QLabel("90")  # 0 is the initial value of the slider
         max_value_str = "99"  # the maximum value the label will show
@@ -534,7 +540,7 @@ class AudiobookMaker(QMainWindow):
         self.save_text_audio_map(directory_path)
 
     def whisper_analyze(self):
-
+        
         selected_row = self.tableWidget.currentRow()
         if selected_row == -1:  # No row is selected
             QMessageBox.warning(self, "Error", 'Choose a sentence to analyze')
@@ -585,8 +591,17 @@ class AudiobookMaker(QMainWindow):
         whisper_text = normalize_text(whisper_text)
 
         similarity_score = fuzz.ratio(sentence_text, whisper_text)
+        import nltk
+        nltk.download('punkt')
+        sentence_text_tokens = nltk.word_tokenize(sentence_text)
+        whisper_text_tokens = nltk.word_tokenize(whisper_text)
         
-        print(f'|{sentence_text}| & |{whisper_text}| --Score: {similarity_score}')
+        similarity_score = similarity_score - 5*abs(len(whisper_text_tokens) - len(sentence_text_tokens))
+
+
+
+
+        print(f'|{sentence_text}| {len(sentence_text_tokens)} & |{whisper_text}| {len(whisper_text_tokens)}  --Score: {similarity_score}')
 
     def whisper_analyze_all(self):
         #setup for saving the scores
@@ -626,10 +641,10 @@ class AudiobookMaker(QMainWindow):
 
             try:
                 test_var = self.text_audio_map[map_key]['whisper_score']
-                
                 if test_var == "":
                     self.batch_whisper_score(map_key, directory_path, p, model) #call function to process whisper scores
-
+                elif self.force_whisper_checkbox.isChecked():
+                    self.batch_whisper_score(map_key, directory_path, p, model) #call function to process whisper scores
                 else:
                     # Update the progress bar
                     self.progress_bar.setValue(self.progress_bar.value() + 1)
@@ -679,6 +694,7 @@ class AudiobookMaker(QMainWindow):
                 
                 regenerated_line_numbers.append(f'{idx+1}')
                 selected_sentence = self.text_audio_map[map_key]['sentence']['text']
+                selected_sentence += " [END]"
                 old_audio_path = self.text_audio_map[map_key]['audio_path']
                 audio_path_parent = os.path.dirname(old_audio_path)
                 generation_settings_path = os.path.join(audio_path_parent, "generation_settings.json")
@@ -740,6 +756,7 @@ class AudiobookMaker(QMainWindow):
                 new_whisper_score = self.text_audio_map[map_key]['whisper_score']
                 if new_whisper_score < whisper_score_target:
                     not_fixed_lines.append(f'{idx+1}')
+                    self.tableWidget.item(idx,1).setBackground(QtGui.QColor(255, 255, 0)) #highlights text
             else:
                 # Update the progress bar
                 self.progress_bar.setValue(self.progress_bar.value() + 1)
@@ -1477,6 +1494,13 @@ class AudiobookMaker(QMainWindow):
         
         #generate score
         whisper_score = fuzz.ratio(sentence_text, whisper_text)
+
+        import nltk
+        nltk.download('punkt')
+        sentence_text_tokens = nltk.word_tokenize(sentence_text)
+        whisper_text_tokens = nltk.word_tokenize(whisper_text)
+        
+        whisper_score = whisper_score - 10*abs(len(whisper_text_tokens) - len(sentence_text_tokens))
 
         #save whisper score to text_audio_map
         self.text_audio_map[map_key]['whisper_score'] = whisper_score        

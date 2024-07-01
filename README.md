@@ -113,3 +113,5 @@ fix roman numeral logic
 Fix UI issues, buttons disabling, etc.
 fix play from selected
 fix the update from file in file menu
+look into ways to speed up text parsing
+fix time parsing

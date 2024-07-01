@@ -252,7 +252,9 @@ def filter_paragraph(paragraph):
 
             # remove elipses or other consecutive periods
             line_content = re.sub(r'\.{2,}|…|\. \.', '.', line_content)
-            #line_content = line_content.replace('..', '.').replace('. .', '.')
+            
+            #remove dashes
+            line_content = line_content.replace('-', ' ')
 
             # Check for abbreviation and merge with the next sentence if required
             if i < len(sentences) - 1 and ends_with_abbreviation(line_content) and sentences[i+1][0].islower():
@@ -289,6 +291,11 @@ def filter_paragraph(paragraph):
             if len(line_content.split()) > 20:
             
                 line_content = line_content.replace('—', ', ')
+                line_content = line_content.replace(';', ', ')
+                line_content = line_content.replace(':', ', ')
+                line_content = line_content.replace('(', ', ')
+                line_content = line_content.replace(')', ', ')
+                line_content = line_content.replace('&', ' and ')
                 # Split the line at commas occurring after more than 20 words
                 words = line_content.split()
                 new_line = []

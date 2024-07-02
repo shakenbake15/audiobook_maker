@@ -115,3 +115,4 @@ fix play from selected
 fix the update from file in file menu
 look into ways to speed up text parsing
 fix time parsing
+fix money parsing

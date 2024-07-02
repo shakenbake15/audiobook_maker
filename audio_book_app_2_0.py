@@ -57,6 +57,33 @@ class AudioGenerationWorker(QThread):
     def report_progress(self, progress):
         self.progress_signal.emit(progress)
 
+class WhisperAnalyzeWorker(QThread):
+    progress_signal = pyqtSignal(int)
+    finished_signal = pyqtSignal()
+
+    def __init__(self, function, *args):
+        super().__init__()
+        self.function = function
+        self.args = args
+
+    def run(self):
+        self.function(*self.args, self.progress_signal.emit)
+        self.finished_signal.emit()
+
+class RegenerateAudioWorker(QThread):
+    progress_signal = pyqtSignal(int)
+    finished_signal = pyqtSignal()
+
+    def __init__(self, function, *args):
+        super().__init__()
+        self.function = function
+        self.args = args
+
+    def run(self):
+        self.function(*self.args, self.progress_signal.emit)
+        self.finished_signal.emit()
+
+
 class AudiobookMaker(QMainWindow):
 
     def __init__(self):
@@ -624,10 +651,8 @@ class AudiobookMaker(QMainWindow):
         #load the whisper model    
         model = whisper.load_model('large')
 
-        total_sentences = len(self.text_audio_map)
 
-        # Set the progress bar maximum value
-        self.progress_bar.setMaximum(total_sentences)
+
 
         #set the label text
         self.header_label2.setText("Whisper Analysis")
@@ -636,21 +661,42 @@ class AudiobookMaker(QMainWindow):
         # Reset the progress bar
         self.progress_bar.setValue(0)
 
+
+        self.whisper_worker = WhisperAnalyzeWorker(self._whisper_analyze_all, model, p)
+        self.whisper_worker.progress_signal.connect(self.progress_bar.setValue)
+        self.whisper_worker.finished_signal.connect(self.on_whisper_analyze_finished)
+        self.whisper_worker.start()
+
+    def _whisper_analyze_all(self, model, p, progress_callback):
+
+        #setup for saving the scores
+        book_name = self.audiobook_label.text()
+        directory_path = os.path.join("audiobooks", book_name)
+        total_sentences = len(self.text_audio_map)
+
         for idx in range(total_sentences):
             map_key = f'{idx}'
-
+            progress_increment = int(((idx +1) / total_sentences) * 100)
             try:
                 test_var = self.text_audio_map[map_key]['whisper_score']
                 if test_var == "":
                     self.batch_whisper_score(map_key, directory_path, p, model) #call function to process whisper scores
+                    progress_callback(progress_increment)
                 elif self.force_whisper_checkbox.isChecked():
                     self.batch_whisper_score(map_key, directory_path, p, model) #call function to process whisper scores
+                    progress_callback(progress_increment)
                 else:
                     # Update the progress bar
-                    self.progress_bar.setValue(self.progress_bar.value() + 1)
+                    progress_callback(progress_increment)
+                    #progress_calculation = (idx +1) / total_sentences
+                    #progress_callback(progress_calculation)
             
             except KeyError:
                 self.batch_whisper_score(self, map_key, directory_path, p, model) #call function to process whisper scores
+    
+    def on_whisper_analyze_finished(self):
+    # Code to run after whisper analysis is complete
+        pass
 
     def regenerate_audio_by_Whisper_Score(self):
 
@@ -664,13 +710,20 @@ class AudiobookMaker(QMainWindow):
             text_audio_map = json.load(file)
             self.text_audio_map = text_audio_map
 
-        total_sentences = len(self.text_audio_map)
+
         
         #set target for regeneration
         whisper_score_target = self.whisper_target_slider.value()
         
+        self.regenerate_worker = RegenerateAudioWorker(self._regenerate_audio_by_Whisper_Score, whisper_score_target)
+        self.regenerate_worker.progress_signal.connect(self.progress_bar.setValue)
+        self.regenerate_worker.finished_signal.connect(self.on_regenerate_audio_finished)
+        self.regenerate_worker.start()
+
+    def _regenerate_audio_by_Whisper_Score(self, whisper_score_target, progress_callback):
         # Set the progress bar maximum value
-        self.progress_bar.setMaximum(total_sentences)
+        #self.progress_bar.setMaximum(total_sentences)
+        total_sentences = len(self.text_audio_map)
 
         #set the label text
         self.header_label2.setText("Regenerating Sentences with Low Score")
@@ -689,6 +742,7 @@ class AudiobookMaker(QMainWindow):
             map_key = f'{idx}'
             
             whisper_score = self.text_audio_map[map_key]['whisper_score']
+            progress_increment = int(((idx +1) / total_sentences) * 100)
 
             if whisper_score < whisper_score_target:
                 
@@ -721,11 +775,11 @@ class AudiobookMaker(QMainWindow):
                 self.save_text_audio_map(directory_path)      
                 
                 # Update the progress bar
-                self.progress_bar.setValue(self.progress_bar.value() + 1)
+                progress_callback(progress_increment)
 
             else:
                 # Update the progress bar
-                self.progress_bar.setValue(self.progress_bar.value() + 1)
+                progress_callback(progress_increment)
 
         #2nd loop, time to rescore
         
@@ -750,20 +804,25 @@ class AudiobookMaker(QMainWindow):
             map_key = f'{idx}'
           
             whisper_score = self.text_audio_map[map_key]['whisper_score']
-
+            progress_increment = int(((idx +1) / total_sentences) * 100)
             if whisper_score < whisper_score_target:
                 self.batch_whisper_score(map_key, directory_path, p, model) #call function to process whisper scores
                 new_whisper_score = self.text_audio_map[map_key]['whisper_score']
+                progress_callback(progress_increment)
                 if new_whisper_score < whisper_score_target:
                     not_fixed_lines.append(f'{idx+1}')
                     self.tableWidget.item(idx,1).setBackground(QtGui.QColor(255, 255, 0)) #highlights text
             else:
                 # Update the progress bar
-                self.progress_bar.setValue(self.progress_bar.value() + 1)
+                progress_callback(progress_increment)
         
         #print tracking info
         print(f"Regenerated lines: {regenerated_line_numbers}")
         print(f'Regerenated, but not fixed {not_fixed_lines}')
+
+    def on_regenerate_audio_finished(self):
+        # Code to run after audio regeneration is complete
+        pass
 
     def load_existing_audiobook(self):
         directory_path = QFileDialog.getExistingDirectory(self, "Select an Audiobook Directory")
@@ -1081,10 +1140,6 @@ class AudiobookMaker(QMainWindow):
                 json.dump({"background_image": None}, json_file)
                 
         self.update_background()
-
-
-
-
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #   Audio Generation Utilities
@@ -1517,7 +1572,7 @@ class AudiobookMaker(QMainWindow):
         self.save_text_audio_map(directory_path)
 
         # Update the progress bar
-        self.progress_bar.setValue(self.progress_bar.value() + 1)
+        #self.progress_bar.setValue(self.progress_bar.value() + 1)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

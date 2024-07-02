@@ -292,7 +292,7 @@ def filter_paragraph(paragraph):
             
                 line_content = line_content.replace('—', ', ')
                 line_content = line_content.replace(';', ', ')
-                line_content = line_content.replace(':', ', ')
+                #line_content = line_content.replace(':', ', ')
                 line_content = line_content.replace('(', ', ')
                 line_content = line_content.replace(')', ', ')
                 line_content = line_content.replace('&', ' and ')
